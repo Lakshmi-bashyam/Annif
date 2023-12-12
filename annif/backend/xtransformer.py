@@ -310,22 +310,3 @@ class XTransformerBackend(mixins.TfidfVectorizerMixin, backend.AnnifBackend):
                 results.append(SubjectSuggestion(subject_id=idx, score=score))
             batch_result.append(results)
         return SuggestionBatch.from_sequence(batch_result, self.project.subjects)
-    
-    # def _suggest(self, text: str, params: dict[str, Any]) -> list[SubjectSuggestion]:
-    #     text = " ".join(text.split())
-    #     vector = self.vectorizer.transform([text])
-    #     if vector.nnz == 0:  # All zero vector, empty result
-    #         return []
-    #     new_params = apply_param_parse_config(self.PARAM_CONFIG, params)
-    #     prediction = self._model.predict(
-    #         [text],
-    #         X_feat=vector.sorted_indices(),
-    #         batch_size=new_params["batch_size"],
-    #         use_gpu=False,
-    #         only_top_k=new_params["limit"],
-    #         post_processor=new_params["post_processor"],
-    #     )
-    #     results = []
-    #     for idx, score in zip(prediction.indices, prediction.data):
-    #         results.append(SubjectSuggestion(subject_id=idx, score=score))
-    #     return results
