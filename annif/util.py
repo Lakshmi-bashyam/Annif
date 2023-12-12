@@ -9,6 +9,7 @@ import tempfile
 from shutil import rmtree
 from typing import Any, Callable
 import numpy as np
+import yaml
 
 from annif import logger
 
@@ -76,6 +77,10 @@ def atomic_save_folder(obj, dirname, method=None):
             rmtree(newname)
         os.replace(fn, newname)
 
+def create_paramparser():
+        # read params
+        params = yaml.safe_load(open('params.yaml'))['train']
+        return params
 
 def cleanup_uri(uri: str) -> str:
     """remove angle brackets from a URI, if any"""

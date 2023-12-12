@@ -80,9 +80,11 @@ class TfidfVectorizerMixin:
         # avoid UserWarning when overriding tokenizer
         if "tokenizer" in params:
             params["token_pattern"] = None
+        type = params.pop('type', 'train')
         self.vectorizer = TfidfVectorizer(**params)
         veccorpus = self.vectorizer.fit_transform(input)
-        annif.util.atomic_save(
-            self.vectorizer, self.datadir, self.VECTORIZER_FILE, method=joblib.dump
-        )
+        if type == 'train':
+            annif.util.atomic_save(
+                self.vectorizer, self.datadir, self.VECTORIZER_FILE, method=joblib.dump
+            )
         return veccorpus

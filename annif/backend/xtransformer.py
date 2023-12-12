@@ -14,11 +14,13 @@ from pecos.xmc.xtransformer.module import MLProblemWithText
 
 from annif.exception import NotInitializedException, NotSupportedException
 from annif.suggestion import SuggestionBatch, SubjectSuggestion, vector_to_suggestions
+from annif import cli_util
 from annif.util import (
     apply_param_parse_config,
     atomic_save,
     atomic_save_folder,
     boolean,
+    create_paramparser
 )
 
 from . import backend, mixins
@@ -42,6 +44,11 @@ class XTransformerBackend(mixins.TfidfVectorizerMixin, backend.AnnifBackend):
     train_X_file = "xtransformer-train-X.npz"
     train_y_file = "xtransformer-train-y.npz"
     train_txt_file = "xtransformer-train-raw.txt"
+    
+    val_X_file = "xtransformer-val-X.npz"
+    val_y_file = "xtransformer-val-y.npz"
+    val_txt_file = "xtransformer-val-raw.txt"
+
     model_folder = "xtransformer-model"
 
     PARAM_CONFIG = {
@@ -140,11 +147,19 @@ class XTransformerBackend(mixins.TfidfVectorizerMixin, backend.AnnifBackend):
         params.update(self.DEFAULT_PARAMETERS)
         return params
 
-    def _create_train_files(self, veccorpus, corpus):
-        self.info("creating train file")
+    def _create_train_files(self, veccorpus, corpus, type):
+        self.info("creating {} file".format(type))
         Xs = []
         ys = []
-        txt_pth = osp.join(self.datadir, self.train_txt_file)
+        if type == 'train':
+            txt_pth = osp.join(self.datadir, self.train_txt_file)
+            target_Xfile = self.train_X_file
+            target_Yfile = self.train_y_file
+        elif type == 'val':
+            txt_pth = osp.join(self.datadir, self.val_txt_file)
+            target_Xfile = self.val_X_file
+            target_Yfile = self.val_y_file
+
         with open(txt_pth, "w", encoding="utf-8") as txt_file:
             for doc, vector in zip(corpus.documents, veccorpus):
                 subject_set = doc.subject_set
@@ -165,13 +180,13 @@ class XTransformerBackend(mixins.TfidfVectorizerMixin, backend.AnnifBackend):
         atomic_save(
             sp.vstack(Xs, format="csr"),
             self.datadir,
-            self.train_X_file,
+            target_Xfile,
             method=lambda mtrx, target: sp.save_npz(target, mtrx, compressed=True),
         )
         atomic_save(
             sp.vstack(ys, format="csr"),
             self.datadir,
-            self.train_y_file,
+            target_Yfile,
             method=lambda mtrx, target: sp.save_npz(target, mtrx, compressed=True),
         )
 
@@ -183,6 +198,18 @@ class XTransformerBackend(mixins.TfidfVectorizerMixin, backend.AnnifBackend):
         )["corpus"]
         train_X = sp.load_npz(osp.join(self.datadir, self.train_X_file))
         train_y = sp.load_npz(osp.join(self.datadir, self.train_y_file))
+
+        # Extra info about validation set
+        args = create_paramparser()
+        val_dir = args['val_path']
+        val_txts = Preprocessor.load_data_from_file(
+            osp.join(self.datadir, self.val_txt_file),
+            label_text_path=None,
+            text_pos=0,
+        )["corpus"]
+        val_X = sp.load_npz(osp.join(self.datadir, self.val_X_file))
+        val_y = sp.load_npz(osp.join(self.datadir, self.val_y_file))
+
         model_path = osp.join(self.datadir, self.model_folder)
         new_params = apply_param_parse_config(self.PARAM_CONFIG, self.params)
         new_params["only_topk"] = new_params.pop("limit")
@@ -194,15 +221,18 @@ class XTransformerBackend(mixins.TfidfVectorizerMixin, backend.AnnifBackend):
         ).to_dict()
 
         self.info("Start training")
+
         # enable progress
+        # Pass annif debugger here
         matcher.LOGGER.setLevel(logging.DEBUG)
         matcher.LOGGER.addHandler(logging.StreamHandler(stream=stdout))
         model.LOGGER.setLevel(logging.DEBUG)
         model.LOGGER.addHandler(logging.StreamHandler(stream=stdout))
+
         self._model = XTransformer.train(
             MLProblemWithText(train_txts, train_y, X_feat=train_X),
             clustering=None,
-            val_prob=None,
+            val_prob=MLProblemWithText(val_txts, val_y, X_feat=val_X),
             train_params=train_params,
             pred_params=pred_params,
             beam_size=int(params["beam_size"]),
@@ -211,25 +241,48 @@ class XTransformerBackend(mixins.TfidfVectorizerMixin, backend.AnnifBackend):
         )
         atomic_save_folder(self._model, model_path)
 
+    def _create_corpus_files(
+            self,
+            corpus: DocumentCorpus,
+            params: dict[str, Any]
+            ):
+        if corpus == "cached":
+            self.info("Reusing cached training data from previous run.")
+        else:
+            if corpus.is_empty():
+                raise NotSupportedException("Cannot train project with no documents")
+            input = (doc.text for doc in corpus.documents)
+            vecparams = {
+                "min_df": int(params["min_df"]),
+                "tokenizer": self.project.analyzer.tokenize_words,
+                "ngram_range": (1, int(params["ngram"])),
+                "type": params["type"]
+            }
+            veccorpus = self.create_vectorizer(input, vecparams)
+        return veccorpus
+        
     def _train(
         self,
         corpus: DocumentCorpus,
         params: dict[str, Any],
         jobs: int = 0,
     ) -> None:
-        if corpus == "cached":
-            self.info("Reusing cached training data from previous run.")
-        else:
-            if corpus.is_empty():
-                raise NotSupportedException("Cannot t project with no documents")
-            input = (doc.text for doc in corpus.documents)
-            vecparams = {
-                "min_df": int(params["min_df"]),
-                "tokenizer": self.project.analyzer.tokenize_words,
-                "ngram_range": (1, int(params["ngram"])),
-            }
-            veccorpus = self.create_vectorizer(input, vecparams)
-            self._create_train_files(veccorpus, corpus)
+        params['type'] = 'train'
+        veccorpus = self._create_corpus_files(corpus, params)
+        self._create_train_files(veccorpus, corpus, 'train')
+
+        # Valdation data
+        args = create_paramparser()
+        if bool(args['enable_val']):
+            val_dir = (args['val_path'],)
+            proj = cli_util.get_project('x_transformers')
+            valcorpus = cli_util.open_documents(
+            val_dir, proj.subjects, proj.vocab_lang, None
+            )
+            params['type'] = 'val'
+            val_veccorpus = self._create_corpus_files(valcorpus, params)
+            self._create_train_files(val_veccorpus, valcorpus, 'val')
+
         self._create_model(params, jobs)
 
     def _suggest_batch(
@@ -257,3 +310,22 @@ class XTransformerBackend(mixins.TfidfVectorizerMixin, backend.AnnifBackend):
                 results.append(SubjectSuggestion(subject_id=idx, score=score))
             batch_result.append(results)
         return SuggestionBatch.from_sequence(batch_result, self.project.subjects)
+    
+    # def _suggest(self, text: str, params: dict[str, Any]) -> list[SubjectSuggestion]:
+    #     text = " ".join(text.split())
+    #     vector = self.vectorizer.transform([text])
+    #     if vector.nnz == 0:  # All zero vector, empty result
+    #         return []
+    #     new_params = apply_param_parse_config(self.PARAM_CONFIG, params)
+    #     prediction = self._model.predict(
+    #         [text],
+    #         X_feat=vector.sorted_indices(),
+    #         batch_size=new_params["batch_size"],
+    #         use_gpu=False,
+    #         only_top_k=new_params["limit"],
+    #         post_processor=new_params["post_processor"],
+    #     )
+    #     results = []
+    #     for idx, score in zip(prediction.indices, prediction.data):
+    #         results.append(SubjectSuggestion(subject_id=idx, score=score))
+    #     return results
