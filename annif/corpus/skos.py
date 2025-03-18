@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 import rdflib
 import rdflib.util
 from rdflib.namespace import OWL, RDF, RDFS, SKOS
+from rdflib.namespace import Namespace
+
 
 import annif.util
 
@@ -20,6 +22,7 @@ if TYPE_CHECKING:
 
     from rdflib.term import URIRef
 
+ZBWEXT = Namespace("http://zbw.eu/namespaces/zbw-extensions/")
 
 def serialize_subjects_to_skos(subjects: Iterator, path: str) -> None:
     """Create a SKOS representation of the given subjects and serialize it
@@ -109,7 +112,7 @@ class SubjectFileSKOS(SubjectCorpus):
 
     @property
     def concepts(self) -> Iterator[URIRef]:
-        for concept in self.graph.subjects(RDF.type, SKOS.Concept):
+        for concept in self.graph.subjects(RDF.type, SKOS.Concept and ZBWEXT.Descriptor):
             if (concept, OWL.deprecated, rdflib.Literal(True)) in self.graph:
                 continue
             yield concept
